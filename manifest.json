@@ -1,0 +1,32 @@
+{
+    "manifest_version": 3,
+    "name": "My Productivity Tool",
+    "version": "1.0",
+    "description": "Notes, reminders and page tools",
+  
+    "permissions": [
+      "activeTab",
+      "storage",
+      "alarms",
+      "notifications",
+      "scripting"
+    ],
+  
+    "action": {
+      "default_popup": "popup/popup.html",
+      "default_icon": {
+        "48": "icons/books_48pt_3x.png"
+      }
+    },
+  
+    "background": {
+      "service_worker": "background.js"
+    },
+  
+    "content_scripts": [
+      {
+        "matches": ["<all_urls>"],
+        "js": ["content.js"]
+      }
+    ]
+  }
