@@ -2,8 +2,16 @@
 <html>
   <head>
     <meta charset="UTF-8" />
+    <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
-    <h1>Hello!</h1>
+    <h1>Lecture Checkpoint Quiz</h1>
+
+    <button id="toggle">Start monitoring this tab</button>
+
+    <div id="status">Idle</div>
+    <p class="hint">First start downloads the Whisper model (~75 MB, one time). Audio is transcribed locally — it never leaves your computer. API key is read from <span class="mono">config.js</span>.</p>
+
+    <script src="popup.js"></script>
   </body>
 </html>
