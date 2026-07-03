@@ -59,7 +59,14 @@ function onModelProgress(p) {
   reportStatus('loading-model', `Downloading Whisper model… ${pct}% (first run only)`);
 }
 
-async function loadModel() {
+// Idempotent under concurrent calls (capture start + first chunk both call it).
+let modelPromise = null;
+function loadModel() {
+  if (!modelPromise) modelPromise = loadModelOnce();
+  return modelPromise;
+}
+
+async function loadModelOnce() {
   if (transcriber) return;
   reportStatus('loading-model', 'Preparing Whisper model…');
   const { pipeline } = await loadTransformers();
@@ -83,8 +90,8 @@ async function loadModel() {
 
 async function startCapture(streamId) {
   if (capturing) return;
-  await loadModel();
-
+  // IMPORTANT: consume the streamId immediately — it expires within seconds.
+  // The Whisper model loads in parallel; audio chunks queue up until it's ready.
   mediaStream = await navigator.mediaDevices.getUserMedia({
     audio: {
       mandatory: {
@@ -116,6 +123,7 @@ async function startCapture(streamId) {
   await audioCtx.resume().catch(() => {});
   capturing = true;
   reportStatus('capturing', 'Listening to tab audio');
+  loadModel().catch((e) => reportStatus('error', 'Model load failed: ' + e));
 }
 
 function onPCM(block) {
@@ -161,6 +169,7 @@ async function processQueue() {
   if (processing) return;
   processing = true;
   try {
+    await loadModel(); // no-op once loaded; chunks wait in the queue meanwhile
     while (chunkQueue.length > 0) {
       const chunk = chunkQueue.shift();
       if (rms(chunk) < SILENCE_RMS) continue; // skip silence/paused stretches
