@@ -1,6 +1,12 @@
 // background.js — orchestrates capture, checkpoints, and Gemini MCQ generation.
 
-importScripts('config.js'); // defines LCQ_CONFIG (machine-local, gitignored)
+// config.js defines LCQ_CONFIG (machine-local, gitignored). If it's missing,
+// keep the worker alive — getApiConfig() reports a clear error at quiz time.
+try {
+  importScripts('config.js');
+} catch (e) {
+  console.warn('config.js not found. Copy config.example.js to config.js and paste your Gemini API key.');
+}
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 
