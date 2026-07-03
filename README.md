@@ -24,7 +24,7 @@ video playback ──content.js──▶ 10-min checkpoint ──▶ background.
 3. `chrome://extensions` → enable Developer mode → **Load unpacked** → select this folder
 4. Open your course video, click the extension icon → **Start monitoring this tab**, and play the video
 
-First start downloads the Whisper model (~40 MB) from Hugging Face — one time only, then it's cached.
+First start downloads the Whisper model (~75 MB) from Hugging Face — one time only, then it's cached.
 
 ## Notes & limits
 
