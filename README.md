@@ -38,6 +38,6 @@ First start downloads the Whisper model (~75 MB) from Hugging Face — one time 
 
 | Piece | Tool | Cost |
 |---|---|---|
-| Transcription | Whisper tiny.en via transformers.js, in-browser | Free, local |
+| Transcription | Whisper base.en via transformers.js, in-browser | Free, local |
 | MCQ generation | Gemini 2.5 Flash free tier | Free |
 | Everything else | Vanilla Chrome MV3 APIs | Free |
