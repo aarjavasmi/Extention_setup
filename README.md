@@ -20,7 +20,7 @@ video playback ──content.js──▶ 10-min checkpoint ──▶ background.
 ## Setup
 
 1. Get a free Gemini API key at https://aistudio.google.com/apikey (no card required)
-2. Copy `config.example.js` to `config.js` and paste your key into `GEMINI_API_KEY`. This file is gitignored — never commit it. (Team: get the shared key from the group chat.)
+2. Copy `config.example.js` to `config.js` and paste your key into `GEMINI_API_KEY`. This file is gitignored — never commit it. 
 3. `chrome://extensions` → enable Developer mode → **Load unpacked** → select this folder
 4. Open your course video, click the extension icon → **Start monitoring this tab**, and play the video
 
