@@ -13,9 +13,9 @@ video playback ──content.js──▶ evaluate every 2 min ──▶ backgrou
 
 - `content.js` — tracks *watched* seconds on the page's main `<video>` (seek-proof); asks for an evaluation every 2 minutes without pausing
 - `sidebar.js` — quiz UI: options, instant grading, explanations, score, Resume button
-- `offscreen.js` + `pcm-worklet.js` — captures tab audio, passes it through so you still hear it, transcribes 30s chunks with `whisper-tiny.en` (WebGPU, falls back to CPU/WASM)
-- `background.js` — orchestrates capture and calls Gemini with the last segment's transcript
-- `popup/` — save your API key, start/stop monitoring
+- `offscreen.js` + `pcm-worklet.js` — captures tab audio, passes it through so you still hear it, transcribes 30s chunks with `whisper-base` (multilingual: English/Hindi/Hinglish; WebGPU, falls back to CPU/WASM)
+- `background.js` — orchestrates capture; asks Gemini whether 3+ subtopics are complete and, if so, gets one MCQ per subtopic
+- `popup/` — start/stop monitoring (API key lives in `config.js`)
 
 ## Setup
 
@@ -31,13 +31,16 @@ First start downloads the Whisper model (~75 MB) from Hugging Face — one time 
 - Keep the video playing at 1x–1.5x; transcription runs in near real time (faster with WebGPU)
 - The tab keeps playing audio during capture (passthrough); stopping monitoring restores normal audio
 - Silence/paused stretches are skipped automatically
-- Gemini free tier allows plenty of requests/day for a full study session; the key is stored in `chrome.storage.sync`, used only from your browser
-- If a checkpoint has too little speech (e.g., you paused for 9 of the 10 minutes), it's skipped gracefully and the video resumes
+- Gemini free tier (~1,500 requests/day) easily covers full study sessions at ~30 evaluations/hour; the key lives in `config.js` (gitignored) and is only used from your browser
+- The video pauses ONLY when a quiz is ready — evaluations run silently in the background while you watch
+- When the video ends, any remaining content gets a final quiz even if fewer than 3 subtopics completed
+- A "Skip quiz" link is always available, and questions include per-subtopic tags, explanations, and a score
+- YouTube ads get transcribed too and may occasionally influence questions (known limitation)
 
 ## Free-resource stack
 
 | Piece | Tool | Cost |
 |---|---|---|
-| Transcription | Whisper base.en via transformers.js, in-browser | Free, local |
+| Transcription | Whisper base (multilingual) via transformers.js, in-browser | Free, local |
 | MCQ generation | Gemini 2.5 Flash free tier | Free |
 | Everything else | Vanilla Chrome MV3 APIs | Free |
