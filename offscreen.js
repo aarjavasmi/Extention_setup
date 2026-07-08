@@ -133,6 +133,8 @@ function onPCM(block) {
   if (pcmLength >= CHUNK_SECONDS * sampleRate) flushBuffer();
 }
 
+const MAX_QUEUED_CHUNKS = 40; // ~20 min of audio — cap memory if the CPU can't keep up
+
 function flushBuffer() {
   if (pcmLength === 0) return;
   const merged = new Float32Array(pcmLength);
@@ -141,6 +143,10 @@ function flushBuffer() {
   pcmBuffer = [];
   pcmLength = 0;
   chunkQueue.push(merged);
+  if (chunkQueue.length > MAX_QUEUED_CHUNKS) {
+    chunkQueue.shift(); // drop the oldest chunk rather than growing unboundedly
+    console.warn('Transcription is falling behind — dropped the oldest audio chunk.');
+  }
   processQueue();
 }
 
@@ -175,7 +181,8 @@ async function processQueue() {
       if (rms(chunk) < SILENCE_RMS) continue; // skip silence/paused stretches
       const audio = downsample(chunk, sampleRate, TARGET_SAMPLE_RATE);
       try {
-        const result = await transcriber(audio);
+        // language: null → Whisper auto-detects per chunk (English/Hindi/Hinglish).
+        const result = await transcriber(audio, { language: null, task: 'transcribe' });
         const text = (result.text || '').trim();
         if (text) transcriptParts.push(text);
       } catch (e) {
@@ -187,15 +194,19 @@ async function processQueue() {
   }
 }
 
-async function drainAndGetTranscript() {
-  flushBuffer();                      // include the partial chunk at checkpoint time
+async function drainAndGetTranscript(consume) {
+  flushBuffer();                      // include the partial chunk at evaluation time
   await processQueue();               // no-op if already running…
-  while (processing || chunkQueue.length > 0) {   // …so wait until the queue empties
+  // …so wait until the queue empties — but never hang forever: if a chunk is
+  // stuck (slow CPU, wedged wasm), return whatever transcript we already have.
+  const deadline = Date.now() + 120000;
+  while ((processing || chunkQueue.length > 0) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 500));
   }
-  const text = transcriptParts.join(' ');
-  transcriptParts = [];               // reset window for the next 10-minute segment
-  return text;
+  const count = transcriptParts.length;
+  const text = transcriptParts.slice(0, count).join(' ');
+  if (consume) transcriptParts.splice(0, count);
+  return { text, count };
 }
 
 function stopCapture() {
@@ -220,10 +231,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_TRANSCRIPT') {
-    drainAndGetTranscript()
-      .then((text) => sendResponse({ ok: true, text }))
+    drainAndGetTranscript(message.consume !== false)
+      .then(({ text, count }) => sendResponse({ ok: true, text, count }))
       .catch((e) => sendResponse({ ok: false, error: String(e) }));
     return true;
+  }
+
+  if (message.type === 'CONSUME_TRANSCRIPT') {
+    // Remove the parts already quizzed on; keep speech that arrived meanwhile.
+    const n = typeof message.count === 'number' ? message.count : transcriptParts.length;
+    transcriptParts.splice(0, n);
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (message.type === 'OFFSCREEN_STOP') {

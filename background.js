@@ -72,6 +72,9 @@ async function sendToTab(tabId, message) {
 
 async function startMonitoring(tabId) {
   await getSession();
+  // Already monitoring (this tab or another)? Stop first — otherwise the
+  // offscreen page keeps transcribing the OLD tab's audio.
+  if (session.active) await stopMonitoring();
   let streamId;
   try {
     streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
@@ -92,8 +95,10 @@ async function startMonitoring(tabId) {
 
 async function stopMonitoring() {
   await getSession();
+  // Stop the capture but keep the offscreen document alive — the Whisper model
+  // stays warm in memory, so restarting monitoring is instant instead of a
+  // 10-30s model re-initialization.
   try { await chrome.runtime.sendMessage({ target: 'offscreen', type: 'OFFSCREEN_STOP' }); } catch (e) {}
-  try { await chrome.offscreen.closeDocument(); } catch (e) {}
   if (session.tabId != null) {
     try { await chrome.tabs.sendMessage(session.tabId, { type: 'MONITORING_STOPPED' }); } catch (e) {}
   }
@@ -101,52 +106,82 @@ async function stopMonitoring() {
   saveSession();
 }
 
-async function handleCheckpoint(tabId) {
+// Adaptive checkpoints: Gemini looks at the transcript accumulated since the
+// last quiz and decides whether at least one subtopic is complete. If yes, it
+// returns one MCQ per completed subtopic and the transcript window resets.
+let evaluating = false;
+
+async function handleEvaluate(tabId, isFinal = false) {
+  if (evaluating) return; // an evaluation is already in flight
+  evaluating = true;
   try {
     const { key, model } = getApiConfig();
 
-    const res = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'GET_TRANSCRIPT' });
-    if (!res || !res.ok) throw new Error((res && res.error) || 'Could not get transcript');
+    // Peek at the transcript without consuming it.
+    const res = await sendToOffscreen({ target: 'offscreen', type: 'GET_TRANSCRIPT', consume: false });
+    if (!res || !res.ok) return;
 
     const transcript = (res.text || '').trim();
-    if (transcript.split(/\s+/).length < 30) {
-      throw new Error('Not enough transcribed speech in this segment to generate questions.');
-    }
+    // Normally 3+ subtopics need real substance; at video end, quiz whatever remains.
+    if (transcript.split(/\s+/).length < (isFinal ? 60 : 300)) return;
 
-    const questions = await generateMCQs(transcript, key, model);
-    await chrome.tabs.sendMessage(tabId, { type: 'QUIZ_READY', questions });
+    const result = await evaluateAndGenerate(transcript, key, model, isFinal);
+    const minQuestions = isFinal ? 1 : 3;
+    if (result.ready && Array.isArray(result.questions) && result.questions.length >= minQuestions) {
+      // Consume only what we quizzed on; speech that arrived meanwhile is kept.
+      await sendToOffscreen({ target: 'offscreen', type: 'CONSUME_TRANSCRIPT', count: res.count });
+      await chrome.tabs.sendMessage(tabId, { type: 'QUIZ_READY', questions: result.questions.slice(0, 4) });
+    }
+    // Not ready → do nothing; the next evaluation fires automatically.
   } catch (e) {
+    // Surface real failures (bad API key, quota) without pausing the lecture.
     try { await chrome.tabs.sendMessage(tabId, { type: 'QUIZ_ERROR', error: String(e.message || e) }); } catch (_) {}
+  } finally {
+    evaluating = false;
   }
 }
 
-async function generateMCQs(transcript, apiKey, model) {
+async function evaluateAndGenerate(transcript, apiKey, model, isFinal = false) {
+  const finalNote = isFinal
+    ? 'NOTE: The video has ENDED — this is the last chance to quiz. If there is ANY testable content at all, respond ready=true with one question per covered subtopic (1-4 questions), even if only one subtopic is complete. '
+    : '';
   const prompt =
-    'You are a tutor helping a student stay attentive during a video lecture. ' +
-    'Below is the (imperfect, auto-generated) transcript of the last ~10 minutes of the lecture. ' +
-    'Write exactly 3 multiple-choice questions that test understanding of the KEY concepts actually explained in this segment. ' +
-    'Rules: 4 options each, exactly one correct; plausible distractors; do not reference "the transcript"; ' +
-    'ignore transcription glitches; keep questions self-contained. ' +
-    'The lecture may be in English, Hindi, or Hinglish, but ALWAYS write the questions, options, and explanations in English only. ' +
+    'You are a tutor monitoring a live video lecture to promote active recall. ' + finalNote +
+    'Below is the (imperfect, auto-generated) transcript accumulated since the last quiz. ' +
+    'First decide: has the lecturer COMPLETED at least THREE distinct, coherent subtopics with enough substance to test? ' +
+    'A subtopic is complete when its explanation has clearly concluded — not mid-explanation. ' +
+    'If fewer than 3 subtopics are complete, or the content is too thin, respond with ready=false and an empty questions array — the student keeps watching. ' +
+    'If 3 or more subtopics are complete, respond with ready=true and EXACTLY ONE multiple-choice question per completed subtopic (3-4 questions; if more than 4 subtopics completed, pick the 4 most important). ' +
+    'Rules per question: name the subtopic; 4 options, exactly one correct; plausible distractors; ' +
+    'do not reference "the transcript"; ignore transcription glitches; keep questions self-contained. ' +
+    'The lecture may be in English, Hindi, or Hinglish, but ALWAYS write subtopics, questions, options, and explanations in English only. ' +
     'Standard technical terms used by the lecturer stay as-is.\n\nTRANSCRIPT:\n' + transcript;
-
+    
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
-      temperature: 0.6,
+      temperature: 0.4,
       responseMimeType: 'application/json',
       responseSchema: {
-        type: 'ARRAY',
-        items: {
-          type: 'OBJECT',
-          properties: {
-            question: { type: 'STRING' },
-            options: { type: 'ARRAY', items: { type: 'STRING' } },
-            answerIndex: { type: 'INTEGER', description: '0-based index of the correct option' },
-            explanation: { type: 'STRING' },
+        type: 'OBJECT',
+        properties: {
+          ready: { type: 'BOOLEAN', description: 'true only if at least one subtopic is fully covered' },
+          questions: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                subtopic: { type: 'STRING' },
+                question: { type: 'STRING' },
+                options: { type: 'ARRAY', items: { type: 'STRING' } },
+                answerIndex: { type: 'INTEGER', description: '0-based index of the correct option' },
+                explanation: { type: 'STRING' },
+              },
+              required: ['subtopic', 'question', 'options', 'answerIndex'],
+            },
           },
-          required: ['question', 'options', 'answerIndex'],
         },
+        required: ['ready', 'questions'],
       },
     },
   };
@@ -165,11 +200,13 @@ async function generateMCQs(transcript, apiKey, model) {
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini returned an empty response');
 
-  const questions = JSON.parse(text);
-  if (!Array.isArray(questions) || questions.length === 0) throw new Error('Gemini returned no questions');
-  return questions
-    .filter((q) => q.question && Array.isArray(q.options) && q.options.length >= 2)
-    .slice(0, 3);
+  const result = JSON.parse(text);
+  return {
+    ready: !!result.ready,
+    questions: (result.questions || []).filter(
+      (q) => q.question && Array.isArray(q.options) && q.options.length >= 2
+    ),
+  };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -197,11 +234,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return false;
 
-    case 'CHECKPOINT': {
+    case 'EVALUATE': {
       const tabId = sender.tab && sender.tab.id;
-      if (tabId != null) handleCheckpoint(tabId);
+      if (tabId != null) handleEvaluate(tabId, !!message.final);
       sendResponse({ ok: true });
       return false;
     }
   }
+});
+
+// If the monitored tab is closed, stop the capture instead of transcribing
+// a dead tab forever.
+chrome.tabs.onRemoved.addListener(async (closedTabId) => {
+  await getSession();
+  if (session.active && session.tabId === closedTabId) stopMonitoring();
 });

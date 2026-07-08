@@ -1,6 +1,6 @@
 # Lecture Checkpoint Quiz
 
-Chrome extension that keeps you attentive during course videos. Every 10 minutes of playback it pauses the video and quizzes you with 3 AI-generated MCQs about what was just taught (active recall).
+Chrome extension that keeps you attentive during course videos. It follows the lecture via a live local transcript, and once 3-4 subtopics have been fully explained it pauses the video and quizzes you with one AI-generated MCQ per subtopic (active recall).
 
 Works on **any site** with a video player. 100% free: audio is transcribed **locally in your browser** with Whisper (no audio leaves your machine), and questions are generated with the **Gemini free tier**.
 
@@ -8,10 +8,10 @@ Works on **any site** with a video player. 100% free: audio is transcribed **loc
 
 ```
 tab audio ──tabCapture──▶ offscreen page ──Whisper (local, transformers.js)──▶ rolling transcript
-video playback ──content.js──▶ 10-min checkpoint ──▶ background.js ──▶ Gemini (free) ──▶ 3 MCQs ──▶ sidebar quiz
+video playback ──content.js──▶ evaluate every 2 min ──▶ background.js ──▶ Gemini decides: 3+ subtopics done? ──▶ 1 MCQ per subtopic ──▶ sidebar quiz
 ```
 
-- `content.js` — tracks *watched* seconds on the page's main `<video>` (seek-proof); pauses at each 10-min mark
+- `content.js` — tracks *watched* seconds on the page's main `<video>` (seek-proof); asks for an evaluation every 2 minutes without pausing
 - `sidebar.js` — quiz UI: options, instant grading, explanations, score, Resume button
 - `offscreen.js` + `pcm-worklet.js` — captures tab audio, passes it through so you still hear it, transcribes 30s chunks with `whisper-tiny.en` (WebGPU, falls back to CPU/WASM)
 - `background.js` — orchestrates capture and calls Gemini with the last segment's transcript

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Lecture Checkpoint Quiz",
   "version": "2.0",
-  "description": "Transcribes course videos locally with Whisper and generates AI quiz questions every 10 minutes to promote active recall",
+  "description": "Transcribes course videos locally with Whisper and quizzes you whenever a subtopic completes, to promote active recall",
 
   "permissions": [
     "storage",
@@ -35,7 +35,8 @@
     {
       "matches": ["<all_urls>"],
       "js": ["sidebar.js", "content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
 

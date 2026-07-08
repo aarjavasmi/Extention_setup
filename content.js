@@ -1,15 +1,17 @@
-// content.js — tracks video playback on any site, triggers a quiz checkpoint
-// every 10 minutes of *watched* time. UI helpers come from sidebar.js (same world).
+// content.js — tracks video playback on any site. Every EVAL_INTERVAL of watched
+// time it asks the background to evaluate the transcript; Gemini decides when
+// enough subtopics are complete, and only then does the quiz appear (and the
+// video pause). UI helpers come from sidebar.js (same isolated world).
 
-const QUIZ_INTERVAL_SECONDS = 600; // 10 minutes
+const EVAL_INTERVAL_SECONDS = 120; // how often we ask "is there enough content yet?"
 
 let lcqMonitoring = false;
 let lcqVideo = null;
 let lcqWatchedSeconds = 0;
 let lcqLastTime = null;
-let lcqCheckpointCount = 0;
-let lcqAwaitingQuiz = false;
+let lcqQuizShowing = false;
 let lcqRescanTimer = null;
+let lcqLastErrorAt = 0;
 
 function lcqFindMainVideo() {
   const videos = Array.from(document.querySelectorAll('video'));
@@ -24,7 +26,7 @@ function lcqFindMainVideo() {
 }
 
 function lcqOnTimeUpdate() {
-  if (!lcqMonitoring || lcqAwaitingQuiz || !lcqVideo) return;
+  if (!lcqMonitoring || lcqQuizShowing || !lcqVideo) return;
   const t = lcqVideo.currentTime;
   if (lcqLastTime !== null) {
     const delta = t - lcqLastTime;
@@ -33,46 +35,57 @@ function lcqOnTimeUpdate() {
   }
   lcqLastTime = t;
 
-  if (lcqWatchedSeconds >= QUIZ_INTERVAL_SECONDS) {
+  if (lcqWatchedSeconds >= EVAL_INTERVAL_SECONDS) {
     lcqWatchedSeconds = 0;
-    lcqCheckpointCount++;
-    lcqTriggerCheckpoint();
+    // Fire-and-forget: video keeps playing while Gemini decides. The outer
+    // try/catch covers "extension context invalidated" (extension reloaded
+    // while this tab stayed open), which throws synchronously.
+    try { chrome.runtime.sendMessage({ type: 'EVALUATE' }).catch(() => {}); } catch (e) {}
   }
 }
 
-function lcqTriggerCheckpoint() {
-  lcqAwaitingQuiz = true;
-  try { lcqVideo.pause(); } catch (e) {}
-  lcqShowLoading(lcqCheckpointCount * 10);
-  chrome.runtime.sendMessage({ type: 'CHECKPOINT', checkpoint: lcqCheckpointCount }).catch(() => {
-    lcqAwaitingQuiz = false;
-    lcqShowError('Could not reach the extension background. Try reloading the page.', lcqResume);
-  });
+function lcqShowIncomingQuiz(questions) {
+  lcqQuizShowing = true;
+  // The sidebar lives in the page body — leave fullscreen or it'd be invisible.
+  if (document.fullscreenElement) { try { document.exitFullscreen(); } catch (e) {} }
+  try { lcqVideo && lcqVideo.pause(); } catch (e) {}
+  lcqShowQuiz(questions, lcqResume);
 }
 
 function lcqResume() {
-  lcqAwaitingQuiz = false;
+  lcqQuizShowing = false;
   lcqHideSidebar();
   if (lcqVideo) { try { lcqVideo.play(); } catch (e) {} }
 }
 
+function lcqOnEnded() {
+  // Video finished — quiz whatever content remains, even if under 3 subtopics.
+  if (!lcqMonitoring || lcqQuizShowing) return;
+  try { chrome.runtime.sendMessage({ type: 'EVALUATE', final: true }).catch(() => {}); } catch (e) {}
+}
+
 function lcqAttach(video) {
   if (lcqVideo === video) return;
-  if (lcqVideo) lcqVideo.removeEventListener('timeupdate', lcqOnTimeUpdate);
+  if (lcqVideo) {
+    lcqVideo.removeEventListener('timeupdate', lcqOnTimeUpdate);
+    lcqVideo.removeEventListener('ended', lcqOnEnded);
+  }
   lcqVideo = video;
   lcqLastTime = null;
-  if (video) video.addEventListener('timeupdate', lcqOnTimeUpdate);
+  if (video) {
+    video.addEventListener('timeupdate', lcqOnTimeUpdate);
+    video.addEventListener('ended', lcqOnEnded);
+  }
 }
 
 function lcqStart() {
   if (lcqMonitoring) return;
   lcqMonitoring = true;
   lcqWatchedSeconds = 0;
-  lcqCheckpointCount = 0;
   lcqAttach(lcqFindMainVideo());
   // Handle SPAs (YouTube etc.): periodically re-check that we're on the right <video>.
   lcqRescanTimer = setInterval(() => {
-    if (!lcqMonitoring || lcqAwaitingQuiz) return;
+    if (!lcqMonitoring || lcqQuizShowing) return;
     const v = lcqFindMainVideo();
     if (v && v !== lcqVideo) lcqAttach(v);
   }, 3000);
@@ -80,7 +93,7 @@ function lcqStart() {
 
 function lcqStop() {
   lcqMonitoring = false;
-  lcqAwaitingQuiz = false;
+  lcqQuizShowing = false;
   if (lcqRescanTimer) { clearInterval(lcqRescanTimer); lcqRescanTimer = null; }
   lcqAttach(null);
   lcqHideSidebar();
@@ -95,10 +108,17 @@ chrome.runtime.onMessage.addListener((message) => {
       lcqStop();
       break;
     case 'QUIZ_READY':
-      if (lcqAwaitingQuiz) lcqShowQuiz(message.questions, lcqResume);
+      // The script runs in every frame; only the frame that owns the video
+      // shows the quiz (prevents duplicate sidebars on iframe-based players).
+      if (lcqMonitoring && !lcqQuizShowing && lcqVideo) lcqShowIncomingQuiz(message.questions);
       break;
     case 'QUIZ_ERROR':
-      if (lcqAwaitingQuiz) lcqShowError(message.error, lcqResume);
+      // Non-blocking, and throttled: a persistent failure (bad API key, quota)
+      // would otherwise pop the error sidebar on every evaluation.
+      if (lcqMonitoring && !lcqQuizShowing && lcqVideo && Date.now() - lcqLastErrorAt > 10 * 60 * 1000) {
+        lcqLastErrorAt = Date.now();
+        lcqShowError(message.error, lcqResume);
+      }
       break;
   }
 });

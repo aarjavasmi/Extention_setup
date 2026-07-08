@@ -54,7 +54,7 @@ toggleBtn.addEventListener('click', async () => {
       const res = await chrome.runtime.sendMessage({ type: 'START_MONITORING', tabId: tab.id });
       if (res && res.ok) {
         sessionActive = true;
-        setStatus('Monitoring — quiz every 10 min of playback');
+        setStatus('Monitoring — quiz appears when a subtopic completes');
       } else {
         setStatus((res && res.error) || 'Failed to start', true);
       }

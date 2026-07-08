@@ -24,31 +24,6 @@ function lcqHideSidebar() {
   if (sb) sb.style.display = 'none';
 }
 
-function lcqShowLoading(checkpointMinutes) {
-  const sb = lcqEnsureSidebar();
-  sb.style.display = 'block';
-  sb.innerHTML = '';
-  const h = document.createElement('h3');
-  h.textContent = `⏸ ${checkpointMinutes}-minute checkpoint`;
-  h.style.cssText = 'margin:0 0 12px; font-size:17px;';
-  const p = document.createElement('p');
-  p.textContent = 'Transcribing the last segment and generating questions…';
-  p.style.color = '#bbb';
-  const spinner = document.createElement('div');
-  spinner.style.cssText = `
-    width: 28px; height: 28px; margin: 18px auto;
-    border: 3px solid #444; border-top-color: #4da3ff; border-radius: 50%;
-    animation: lcq-spin 0.9s linear infinite;
-  `;
-  if (!document.getElementById('lcq-style')) {
-    const style = document.createElement('style');
-    style.id = 'lcq-style';
-    style.textContent = '@keyframes lcq-spin { to { transform: rotate(360deg); } }';
-    document.head.appendChild(style);
-  }
-  sb.append(h, p, spinner);
-}
-
 function lcqShowError(errorText, onResume) {
   const sb = lcqEnsureSidebar();
   sb.style.display = 'block';
@@ -91,6 +66,17 @@ function lcqShowQuiz(questions, onResume) {
   questions.forEach((q, qi) => {
     const card = document.createElement('div');
     card.style.cssText = 'background:#242424; border-radius:10px; padding:12px; margin-bottom:12px;';
+
+    if (q.subtopic) {
+      const tag = document.createElement('div');
+      tag.textContent = q.subtopic;
+      tag.style.cssText = `
+        display:inline-block; margin-bottom:8px; padding:2px 8px;
+        background:#123a5c; color:#8ec7ff; font-size:11px; font-weight:600;
+        border-radius:999px; letter-spacing:0.3px;
+      `;
+      card.appendChild(tag);
+    }
 
     const qEl = document.createElement('div');
     qEl.textContent = `${qi + 1}. ${q.question}`;
@@ -139,4 +125,15 @@ function lcqShowQuiz(questions, onResume) {
   });
 
   sb.appendChild(footer);
+
+  // Escape hatch: never let a bad/broken quiz hold the video hostage.
+  const skip = document.createElement('button');
+  skip.textContent = 'Skip quiz →';
+  skip.style.cssText = `
+    display:block; margin:14px auto 0; padding:4px;
+    background:none; border:none; color:#777; font-size:12px;
+    cursor:pointer; text-decoration:underline;
+  `;
+  skip.addEventListener('click', onResume);
+  sb.appendChild(skip);
 }
